@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "ds-e2e-test"
+version = "0.1.0"
+description = ""
+authors = ["El Kaplan <el.kaplan@geckorobotics.com>"]
+readme = "README.md"
+packages = [{include = "ds_e2e_test"}]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+aiohttp = "^3.8.3"
+gcloud-aio-storage = "^7.0.1"
+certifi = "^2022.12.7"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
