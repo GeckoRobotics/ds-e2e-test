@@ -1,15 +1,10 @@
 import asyncio
-import ssl
 
 import aiohttp
-import certifi
 from gcloud.aio.storage import Storage, Bucket
 
 
-async def main():
-    slug = "20220901-0bd5e8"
-    # ssl_context = ssl.create_default_context(cafile=certifi.where())
-    # conn = aiohttp.TCPConnector(ssl=ssl_context)
+async def main(slug: str):
     async with aiohttp.ClientSession() as session:
         # setup
         client = Storage(session=session)
@@ -21,4 +16,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main("20220901-0bd5e8"))
