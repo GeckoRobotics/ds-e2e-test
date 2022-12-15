@@ -13,6 +13,7 @@ gcloud-aio-storage = "^7.0.1"
 certifi = "^2022.12.7"
 pytest = "^7.2.0"
 pytest-asyncio = "^0.20.3"
+google-cloud-bigquery = "^3.4.1"
 
 
 [build-system]
