@@ -1,0 +1,62 @@
+{
+    "metadata": {
+        "version": 4,
+        "laptop": "G4-0013",
+        "rc_version": "5.4.0",
+        "run_name": "000000120220901054406G4-0013_run0001",
+        "run_number": 1,
+        "inspection": "20220901-0bd5e8",
+        "component_type": 1
+    },
+    "configurations": [
+        {
+            "timestamp": "2022-09-01T05:44:06.276851+00:00",
+            "config": {
+                "type": "STRAIGHT",
+                "x_start": 24,
+                "y_start": 6.66,
+                "sensor_forward_offsets": [
+                    0.0
+                ],
+                "sensor_side_offsets": [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9,
+                    10,
+                    11,
+                    12,
+                    13,
+                    14,
+                    15,
+                    16,
+                    17,
+                    18,
+                    19,
+                    20,
+                    21,
+                    22,
+                    23
+                ],
+                "camera_side_offsets": {
+                    "0": 11
+                },
+                "camera_forward_offsets": {
+                    "0": -6.66
+                },
+                "angles": [
+                    0
+                ],
+                "array_flipped": true,
+                "primary_encoder_reversed": false,
+                "secondary_encoder_reversed": false
+            }
+        }
+    ]
+}

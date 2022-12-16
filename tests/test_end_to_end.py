@@ -72,7 +72,7 @@ def export_bigquery_table(
 
 @pytest.mark.asyncio
 async def test_e2e_without_human_validation(caplog):
-    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.INFO)
     slug = "20220901-0bd5e8"
     async with aiohttp.ClientSession() as session:
         # setup
@@ -82,7 +82,7 @@ async def test_e2e_without_human_validation(caplog):
         ds_bucket = Bucket(client, "gecko-data-systems-dev")
         bq_client = bigquery.Client("gecko-dev-data-systems")
 
-        logging.debug("Initial clean")
+        logging.info("Initial clean")
         async def cleanup():
             try:
                 deletes = [
@@ -97,14 +97,14 @@ async def test_e2e_without_human_validation(caplog):
                 print(e.headers)
         await cleanup()
 
-        logging.debug("Uploading sample data")
+        logging.info("Uploading sample data")
 
         # upload test slug
         await upload_directory(
             session, Path(__file__).parent.parent / slug, test_staging_bucket
         )
 
-        logging.debug("Waiting for results")
+        logging.info("Waiting for results")
         # Grab data and test!
         binned_data = await download_blob(
             ds_bucket, f"{slug}/analyzed/{slug}_analyzed.csv"
@@ -124,10 +124,10 @@ async def test_e2e_without_human_validation(caplog):
             test_staging_bucket, f"{slug}_inspection_runs.csv"
         )
 
-        logging.debug("Clean Up")
+        logging.info("Clean Up")
         await cleanup()
 
-        logging.debug("Testing")
+        logging.info("Testing")
         with open('inspection_data.csv', 'rb') as f:
             expected_inspection_data = f.read()
         assert inspection_data == expected_inspection_data
