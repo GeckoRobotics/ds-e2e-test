@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
 import aiofiles
 import aiohttp
 import backoff
+import pandas as pd
 import pytest
 from aiohttp import ClientResponseError
 from gcloud.aio.storage import Storage, Bucket
@@ -70,8 +72,13 @@ def export_bigquery_table(
     return destination_uri
 
 
+@pytest.fixture
+def expected_analyzed() -> pd.DataFrame:
+    return pd.read_csv("20220901-0bd5e8_analyzed_expected.csv").sort(["x_bin", "y_bin"])
+
+
 @pytest.mark.asyncio
-async def test_e2e_without_human_validation(caplog):
+async def test_e2e_without_human_validation(caplog, expected_analyzed):
     caplog.set_level(logging.INFO)
     slug = "20220901-0bd5e8"
     async with aiohttp.ClientSession() as session:
@@ -83,36 +90,42 @@ async def test_e2e_without_human_validation(caplog):
         bq_client = bigquery.Client("gecko-dev-data-systems")
 
         logging.info("Initial clean")
+
         async def cleanup():
             try:
                 deletes = [
                     delete_blobs(client, test_staging_bucket, slug),
                     delete_blobs(client, working_staging_bucket, slug),
                     delete_blobs(client, ds_bucket, slug),
-                    client.delete(test_staging_bucket.name, f"{slug}_inspection_runs.csv"),
+                    client.delete(
+                        test_staging_bucket.name, f"{slug}_inspection_runs.csv"
+                    ),
                 ]
                 await asyncio.gather(*deletes)
-                bq_client.delete_table(f"gecko-dev-data-systems.data_systems.{slug}_inspection_runs")
+                bq_client.delete_table(
+                    f"gecko-dev-data-systems.data_systems.{slug}_inspection_runs"
+                )
             except ClientResponseError as e:
                 print(e.headers)
+
         await cleanup()
 
         logging.info("Uploading sample data")
-
-        # upload test slug
         await upload_directory(
             session, Path(__file__).parent.parent / slug, test_staging_bucket
         )
 
         logging.info("Waiting for results")
-        # Grab data and test!
-        binned_data = await download_blob(
+        binned_analyzed_data_raw = await download_blob(
             ds_bucket, f"{slug}/analyzed/{slug}_analyzed.csv"
         )
-        staging_files = await working_staging_bucket.list_blobs(
-            f"{slug}/deliverable/ds"
-        )
-        assert binned_data == ANALYZED_202209010bd5e8
+        # staging_files = await working_staging_bucket.list_blobs(
+        #     f"{slug}/deliverable/ds"
+        # )
+        binned_analyzed = pd.read_csv(StringIO(binned_analyzed_data_raw.decode()))
+        binned_analyzed = pd.read_csv(binned_analyzed).sort_values(["x_bin", "y_bin"])
+        pd.testing.assert_frame_equal(binned_analyzed, expected_analyzed)
+
         export_bigquery_table(
             bq_client,
             "gecko-dev-data-systems",
@@ -124,11 +137,11 @@ async def test_e2e_without_human_validation(caplog):
             test_staging_bucket, f"{slug}_inspection_runs.csv"
         )
 
-        logging.info("Clean Up")
-        await cleanup()
+        # logging.info("Clean Up")
+        # await cleanup()
 
         logging.info("Testing")
-        with open('inspection_data.csv', 'rb') as f:
+        with open("inspection_data.csv", "rb") as f:
             expected_inspection_data = f.read()
         assert inspection_data == expected_inspection_data
 
