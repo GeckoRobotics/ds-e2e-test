@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timedelta
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -15,10 +16,13 @@ from aiohttp import ClientResponseError
 from gcloud.aio.storage import Storage, Bucket
 from google.cloud import bigquery
 
-from tests.expected_data import ANALYZED_202209010bd5e8
 
-
-@backoff.on_exception(backoff.expo, ClientResponseError, max_time=3600)
+@backoff.on_exception(
+    backoff.constant,
+    (ClientResponseError, asyncio.exceptions.TimeoutError),
+    interval=30,
+    max_time=1800,
+)
 async def download_blob(bucket: Bucket, name: str) -> Any:
     blob = await bucket.get_blob(name)
     return await blob.download()
@@ -74,13 +78,26 @@ def export_bigquery_table(
 
 @pytest.fixture
 def expected_analyzed() -> pd.DataFrame:
-    return pd.read_csv("20220901-0bd5e8_analyzed_expected.csv").sort_values(
-        ["x_bin", "y_bin"]
+    return (
+        pd.read_csv("20220901-0bd5e8_analyzed_expected.csv")
+        .reset_index(drop=True)
+        .sort_values(["x_bin", "y_bin"])
+        .reset_index(drop=True)
     )
 
 
-@pytest.mark.asyncio
-async def test_e2e_without_human_validation(caplog, expected_analyzed):
+@pytest.fixture
+def expected_inspection_runs() -> pd.DataFrame:
+    return (
+        pd.read_csv("20220901-0bd5e8_inspection_runs_expected.csv")
+        .reset_index(drop=True)
+        .sort_values(["run_id", "row_num"])
+        .reset_index(drop=True)
+    )
+
+
+@pytest.fixture
+async def e2e_data(caplog) -> tuple[pd.DataFrame, pd.DataFrame]:
     caplog.set_level(logging.INFO)
     slug = "20220901-0bd5e8"
     async with aiohttp.ClientSession() as session:
@@ -117,30 +134,63 @@ async def test_e2e_without_human_validation(caplog, expected_analyzed):
             session, Path(__file__).parent.parent / slug, test_staging_bucket
         )
 
+        logging.info(
+            f"Waiting for results. Will begin attempting download at {datetime.now() + timedelta(minutes=10)}"
+        )
+        await asyncio.sleep(600)
+
         binned_analyzed_data_raw = await download_blob(
             ds_bucket, f"{slug}/analyzed/{slug}_analyzed.csv"
         )
+        binned_analyzed = (
+            pd.read_csv(StringIO(binned_analyzed_data_raw.decode()))
+            .reset_index(drop=True)
+            .sort_values(["x_bin", "y_bin"])
+            .reset_index(drop=True)
+        )
 
+        # export bigquery table to gcs and then download from there
         export_bigquery_table(
             bq_client,
             "gecko-dev-data-systems",
             "data_systems",
             f"{slug}_inspection_runs",
-            "in-gecko-ben-green-staging",
+            test_staging_bucket.name,
         )
-        inspection_data = await download_blob(
+        inspection_runs = await download_blob(
             test_staging_bucket, f"{slug}_inspection_runs.csv"
         )
+        inspection_runs = (
+            pd.read_csv(StringIO(inspection_runs.decode()))
+            .reset_index(drop=True)
+            .sort_values(["run_id", "row_num"])
+            .reset_index(drop=True)
+        )
 
+        logging.info("Cleanup")
         # await cleanup()
 
-        binned_analyzed = pd.read_csv(
-            StringIO(binned_analyzed_data_raw.decode())
-        ).sort_values(["x_bin", "y_bin"])
-        pd.testing.assert_frame_equal(binned_analyzed, expected_analyzed)
-        with open("inspection_data.csv", "rb") as f:
-            expected_inspection_data = f.read()
-        assert inspection_data == expected_inspection_data
+    return binned_analyzed, inspection_runs
+
+
+@pytest.mark.asyncio
+async def test_e2e_without_human_validation(
+    caplog,
+    e2e_data: tuple[pd.DataFrame, pd.Dataframe],
+    expected_analyzed: pd.DataFrame,
+    expected_inspection_runs,
+):
+    binned_analyzed, inspection_data = e2e_data
+    pd.testing.assert_frame_equal(
+        binned_analyzed,
+        expected_analyzed,
+        check_names=False,
+    )
+    pd.testing.assert_frame_equal(
+        inspection_data.drop(columns=["created_at"]),
+        expected_inspection_runs.drop(columns=["created_at"]),
+        check_names=False,
+    )
 
 
 """
