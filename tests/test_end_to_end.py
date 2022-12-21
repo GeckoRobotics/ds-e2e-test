@@ -22,6 +22,7 @@ from google.cloud import bigquery
     (ClientResponseError, asyncio.exceptions.TimeoutError),
     interval=30,
     max_time=1800,
+    jitter=None,
 )
 async def download_blob(bucket: Bucket, name: str) -> Any:
     blob = await bucket.get_blob(name)
@@ -170,7 +171,7 @@ async def e2e_data(caplog) -> tuple[pd.DataFrame, pd.DataFrame]:
         logging.info("Cleanup")
         await cleanup()
 
-    return binned_analyzed, inspection_runs
+        return binned_analyzed, inspection_runs
 
 
 @pytest.mark.asyncio
