@@ -168,7 +168,7 @@ async def e2e_data(caplog) -> tuple[pd.DataFrame, pd.DataFrame]:
         )
 
         logging.info("Cleanup")
-        # await cleanup()
+        await cleanup()
 
     return binned_analyzed, inspection_runs
 
