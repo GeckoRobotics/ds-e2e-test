@@ -79,8 +79,9 @@ def export_bigquery_table(
 
 @pytest.fixture
 def expected_analyzed() -> pd.DataFrame:
+    path = Path(__file__).parent / "20220901-0bd5e8_analyzed_expected.csv"
     return (
-        pd.read_csv("20220901-0bd5e8_analyzed_expected.csv")
+        pd.read_csv(path)
         .reset_index(drop=True)
         .sort_values(["x_bin", "y_bin"])
         .reset_index(drop=True)
@@ -89,15 +90,16 @@ def expected_analyzed() -> pd.DataFrame:
 
 @pytest.fixture
 def expected_inspection_runs() -> pd.DataFrame:
+    path = Path(__file__).parent / "20220901-0bd5e8_inspection_runs_expected.csv"
     return (
-        pd.read_csv("20220901-0bd5e8_inspection_runs_expected.csv")
+        pd.read_csv(path)
         .reset_index(drop=True)
         .sort_values(["run_id", "row_num"])
         .reset_index(drop=True)
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def e2e_data(caplog) -> tuple[pd.DataFrame, pd.DataFrame]:
     caplog.set_level(logging.INFO)
     slug = "20220901-0bd5e8"
@@ -136,15 +138,15 @@ async def e2e_data(caplog) -> tuple[pd.DataFrame, pd.DataFrame]:
         )
 
         logging.info(
-            f"Waiting for results. Will begin attempting download at {datetime.now() + timedelta(minutes=10)}"
+            f"Waiting for results. Will begin attempting download at {datetime.now() + timedelta(minutes=15)}"
         )
-        await asyncio.sleep(600)
+        await asyncio.sleep(900)
 
-        binned_analyzed_data_raw = await download_blob(
+        slug_analyzed_raw = await download_blob(
             ds_bucket, f"{slug}/analyzed/{slug}_analyzed.csv"
         )
-        binned_analyzed = (
-            pd.read_csv(StringIO(binned_analyzed_data_raw.decode()))
+        slug_analyzed = (
+            pd.read_csv(StringIO(slug_analyzed_raw.decode()))
             .reset_index(drop=True)
             .sort_values(["x_bin", "y_bin"])
             .reset_index(drop=True)
@@ -168,27 +170,32 @@ async def e2e_data(caplog) -> tuple[pd.DataFrame, pd.DataFrame]:
             .reset_index(drop=True)
         )
 
-        logging.info("Cleanup")
-        await cleanup()
+        yield slug_analyzed, inspection_runs
 
-        return binned_analyzed, inspection_runs
+        await cleanup()
 
 
 @pytest.mark.asyncio
-async def test_e2e_without_human_validation(
-    caplog,
-    e2e_data: tuple[pd.DataFrame, pd.Dataframe],
-    expected_analyzed: pd.DataFrame,
-    expected_inspection_runs,
+async def test_slug_analyzed_no_edits(
+    e2e_data: tuple[pd.DataFrame, pd.DataFrame], expected_analyzed: pd.DataFrame
 ):
-    binned_analyzed, inspection_data = e2e_data
+    slug_analyzed, _ = e2e_data
+
     pd.testing.assert_frame_equal(
-        binned_analyzed,
+        slug_analyzed,
         expected_analyzed,
         check_names=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_inspection_runs_no_edits(
+    e2e_data: tuple[pd.DataFrame, pd.Dataframe],
+    expected_inspection_runs: pd.DataFrame,
+):
+    _, inspection_runs = e2e_data
     pd.testing.assert_frame_equal(
-        inspection_data.drop(columns=["created_at"]),
+        inspection_runs.drop(columns=["created_at"]),
         expected_inspection_runs.drop(columns=["created_at"]),
         check_names=False,
     )
