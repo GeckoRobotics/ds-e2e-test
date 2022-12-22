@@ -15,6 +15,18 @@ import pytest
 from aiohttp import ClientResponseError
 from gcloud.aio.storage import Storage, Bucket
 from google.cloud import bigquery
+from google.cloud.exceptions import NotFound
+
+SLUG = "20220901-0bd5e8"
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    """Overrides pytest default function scoped event loop"""
+    policy = asyncio.get_event_loop_policy()
+    loop = policy.new_event_loop()
+    yield loop
+    loop.close()
 
 
 @backoff.on_exception(
@@ -77,7 +89,7 @@ def export_bigquery_table(
     return destination_uri
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def expected_analyzed() -> pd.DataFrame:
     path = Path(__file__).parent / "20220901-0bd5e8_analyzed_expected.csv"
     return (
@@ -88,7 +100,7 @@ def expected_analyzed() -> pd.DataFrame:
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def expected_inspection_runs() -> pd.DataFrame:
     path = Path(__file__).parent / "20220901-0bd5e8_inspection_runs_expected.csv"
     return (
@@ -99,80 +111,122 @@ def expected_inspection_runs() -> pd.DataFrame:
     )
 
 
-@pytest.fixture(scope="module")
-async def e2e_data(caplog) -> tuple[pd.DataFrame, pd.DataFrame]:
-    caplog.set_level(logging.INFO)
-    slug = "20220901-0bd5e8"
-    async with aiohttp.ClientSession() as session:
-        # setup
-        client = Storage(session=session)
-        test_staging_bucket = Bucket(client, "in-gecko-ben-green-staging")
-        working_staging_bucket = Bucket(client, "gecko-working-staging")
-        ds_bucket = Bucket(client, "gecko-data-systems-dev")
-        bq_client = bigquery.Client("gecko-dev-data-systems")
+@pytest.fixture(scope="session")
+async def session() -> aiohttp.ClientSession:
+    session = aiohttp.ClientSession()
+    yield session
+    await session.close()
 
-        logging.info("Initial clean")
 
-        async def cleanup():
-            try:
-                deletes = [
-                    delete_blobs(client, test_staging_bucket, slug),
-                    delete_blobs(client, working_staging_bucket, slug),
-                    delete_blobs(client, ds_bucket, slug),
-                    client.delete(
-                        test_staging_bucket.name, f"{slug}_inspection_runs.csv"
-                    ),
-                ]
-                await asyncio.gather(*deletes)
-                bq_client.delete_table(
-                    f"gecko-dev-data-systems.data_systems.{slug}_inspection_runs"
-                )
-            except ClientResponseError as e:
-                print(e.headers)
+@pytest.fixture(scope="session")
+async def gcs_client(session) -> Storage:
+    yield Storage(session=session)
 
-        await cleanup()
 
-        logging.info("Uploading sample data")
-        await upload_directory(
-            session, Path(__file__).parent.parent / slug, test_staging_bucket
-        )
+@pytest.fixture(scope="session")
+async def staging_test_bucket(gcs_client: Storage) -> Bucket:
+    bucket = Bucket(gcs_client, "in-gecko-ben-green-staging")
 
-        logging.info(
-            f"Waiting for results. Will begin attempting download at {datetime.now() + timedelta(minutes=15)}"
-        )
-        await asyncio.sleep(900)
+    async def clean_inspection_runs():
+        try:
+            await gcs_client.delete(bucket.name, f"{SLUG}_inspection_runs.csv")
+        except ClientResponseError as e:
+            if e.status != 404:
+                raise e
 
-        slug_analyzed_raw = await download_blob(
-            ds_bucket, f"{slug}/analyzed/{slug}_analyzed.csv"
-        )
-        slug_analyzed = (
-            pd.read_csv(StringIO(slug_analyzed_raw.decode()))
-            .reset_index(drop=True)
-            .sort_values(["x_bin", "y_bin"])
-            .reset_index(drop=True)
-        )
+    await asyncio.gather(
+        delete_blobs(gcs_client, bucket, SLUG),
+        clean_inspection_runs(),
+    )
+    yield bucket
+    await asyncio.gather(
+        delete_blobs(gcs_client, bucket, SLUG),
+        clean_inspection_runs(),
+    )
 
-        # export bigquery table to gcs and then download from there
-        export_bigquery_table(
-            bq_client,
-            "gecko-dev-data-systems",
-            "data_systems",
-            f"{slug}_inspection_runs",
-            test_staging_bucket.name,
-        )
-        inspection_runs = await download_blob(
-            test_staging_bucket, f"{slug}_inspection_runs.csv"
-        )
-        inspection_runs = (
-            pd.read_csv(StringIO(inspection_runs.decode()))
-            .reset_index(drop=True)
-            .sort_values(["run_id", "row_num"])
-            .reset_index(drop=True)
-        )
 
-        yield slug_analyzed, inspection_runs
+@pytest.fixture(scope="session")
+async def staging_working_bucket(gcs_client: Storage) -> Bucket:
+    bucket = Bucket(gcs_client, "gecko-working-staging")
+    await delete_blobs(gcs_client, bucket, SLUG)
+    yield bucket
+    await delete_blobs(gcs_client, bucket, SLUG)
 
-        await cleanup()
+
+@pytest.fixture(scope="session")
+async def ds_bucket(gcs_client: Storage) -> Bucket:
+    bucket = Bucket(gcs_client, "gecko-data-systems-dev")
+    await delete_blobs(gcs_client, bucket, SLUG)
+    yield bucket
+    await delete_blobs(gcs_client, bucket, SLUG)
+
+
+def bq_table_exists(bq_client: bigquery.Client, table: str) -> bool:
+    try:
+        bq_client.get_table(table)
+        return True
+    except NotFound:
+        return False
+
+
+@pytest.fixture(scope="session")
+async def bq_client(session) -> bigquery.Client:
+    bq_client = bigquery.Client("gecko-dev-data-systems")
+    table_id = f"gecko-dev-data-systems.data_systems.{SLUG}_inspection_runs"
+    if bq_table_exists(bq_client, table_id):
+        bq_client.delete_table(table_id)
+    yield bq_client
+    if bq_table_exists(bq_client, table_id):
+        bq_client.delete_table(table_id)
+
+
+@pytest.fixture(scope="session")
+async def e2e_data(
+    session: aiohttp.ClientSession,
+    staging_test_bucket: Bucket,
+    ds_bucket: Bucket,
+    bq_client: bigquery.Client,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+
+    logging.info("Uploading sample data")
+    await upload_directory(
+        session, Path(__file__).parent.parent / SLUG, staging_test_bucket
+    )
+
+    logging.info(
+        f"Waiting for results. Will begin attempting download at {datetime.now() + timedelta(minutes=15)}"
+    )
+    await asyncio.sleep(900)
+
+    slug_analyzed_raw = await download_blob(
+        ds_bucket, f"{SLUG}/analyzed/{SLUG}_analyzed.csv"
+    )
+    slug_analyzed = (
+        pd.read_csv(StringIO(slug_analyzed_raw.decode()))
+        .reset_index(drop=True)
+        .sort_values(["x_bin", "y_bin"])
+        .reset_index(drop=True)
+    )
+
+    # export bigquery table to gcs and then download from there
+    export_bigquery_table(
+        bq_client,
+        "gecko-dev-data-systems",
+        "data_systems",
+        f"{SLUG}_inspection_runs",
+        staging_test_bucket.name,
+    )
+    inspection_runs = await download_blob(
+        staging_test_bucket, f"{SLUG}_inspection_runs.csv"
+    )
+    inspection_runs = (
+        pd.read_csv(StringIO(inspection_runs.decode()))
+        .reset_index(drop=True)
+        .sort_values(["run_id", "row_num"])
+        .reset_index(drop=True)
+    )
+
+    yield slug_analyzed, inspection_runs
 
 
 @pytest.mark.asyncio
@@ -199,6 +253,11 @@ async def test_inspection_runs_no_edits(
         expected_inspection_runs.drop(columns=["created_at"]),
         check_names=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_binned_plot_data_no_edits():
+    ...
 
 
 """
