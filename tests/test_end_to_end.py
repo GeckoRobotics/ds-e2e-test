@@ -255,11 +255,6 @@ async def test_inspection_runs_no_edits(
     )
 
 
-@pytest.mark.asyncio
-async def test_binned_plot_data_no_edits():
-    ...
-
-
 """
 outputs:
 In GCS:
